@@ -1,0 +1,15 @@
+A dynamic storage allocator for C programs with following functions:
+
+	int mm_init();
+	
+	void* malloc(size_t size);
+	
+	void free(void* ptr);
+	
+	void* realloc(void* ptr, size_t size);
+	
+	void* calloc (size_t nmemb, size_t size);
+	
+	int mm_checkheap(int verbose);
+
+It is for 64-bit machines. The size of the heap will never be greater than or equal to 2^32 bytes.
