@@ -214,7 +214,7 @@ int mm_init(void) {
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
         return -1;
     }
-    mm_checkheap(1);
+    //mm_checkheap(1);
 
     return 0;
 }
