@@ -244,6 +244,10 @@ void *malloc (size_t size) {
     if (size <= 0) {
     	return NULL;
     }
+<<<<<<< HEAD
+=======
+    //mm_checkheap(1);
+>>>>>>> 3d45ee762783cbd9f78c15f139b3d87fce5ea5f2
 
     if (size <= DSIZE) {
     	asize = 2 * DSIZE;
