@@ -135,6 +135,60 @@ static inline void* prev_block(void* block) {
 	return (char *)block - get_size((char *)block - DSIZE);
 }
 
+static void *extend_heap(size_t);
+static void *coalesce(void *);
+static void *find_fit(size_t);
+static void place(void *, size_t);
+
+/*
+ *  Malloc Implementation
+ *  ---------------------
+ *  The following functions deal with the user-facing malloc implementation.
+ */
+
+/*
+ * Initialize: return -1 on error, 0 on success.
+ */
+static char* heap_listp;
+
+int mm_init(void) {
+	if (verbose) printf("init\n");
+	heap_listp = NULL;
+    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1) {
+        return -1;
+    }
+    put(heap_listp, 0);
+    put(heap_listp + (1*WSIZE), pack(DSIZE, 1));
+    put(heap_listp + (2*WSIZE), pack(DSIZE, 1));
+    put(heap_listp + (3*WSIZE), pack(0, 1));
+    heap_listp += (2 * DSIZE);
+    if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
+        return -1;
+    }
+    mm_checkheap(1);
+
+    return 0;
+}
+
+static inline void *extend_heap(size_t words) {
+	char *bp;
+    size_t size;
+    if (verbose) printf("extending\n");
+    size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
+    if ((long)(bp = mem_sbrk(size)) == -1) {
+        return NULL;
+    }
+    if (verbose) printf("get size\n");
+    put(header_pointer(bp), pack(size, 0));
+    put(footer_pointer(bp), pack(size, 0));
+    put(header_pointer(next_block(bp)), pack(0, 1));
+
+    if (verbose) printf("extending to: %ld\n", get_size(footer_pointer(bp)));
+
+    return coalesce(bp);
+    
+}
+
 static void *coalesce(void *bp) {
 	if (verbose) printf("coalescing\n");
 	REQUIRES(bp != NULL);
@@ -170,53 +224,44 @@ static void *coalesce(void *bp) {
 	return bp;
 }
 
-static inline void *extend_heap(size_t words) {
-	char *bp;
-    size_t size;
-    if (verbose) printf("extending\n");
-    size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-    if ((long)(bp = mem_sbrk(size)) == -1) {
-        return NULL;
+/*
+ * malloc
+ */
+
+void *malloc (size_t size) {
+    if (verbose) printf("malloc: size = %ld\n", size);
+
+    checkheap(1);  // Let's make sure the heap is ok!
+
+    //size = size;
+    size_t asize;
+    size_t extendsize;
+    void *bp;
+
+    if (heap_listp == 0) {
+    	mm_init();
     }
-    if (verbose) printf("get size\n");
-    put(header_pointer(bp), pack(size, 0));
-    put(footer_pointer(bp), pack(size, 0));
-    put(header_pointer(next_block(bp)), pack(0, 1));
+    if (size <= 0) {
+    	return NULL;
+    }
 
-    if (verbose) printf("extending to: %ld\n", get_size(footer_pointer(bp)));
-
-    return coalesce(bp);
+    if (size <= DSIZE) {
+    	asize = 2 * DSIZE;
+    }
+    else {
+    	asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    }
+    if ((bp = find_fit(asize)) != NULL) {
+    	place(bp, asize);
+    	return bp;
+    }
     
-}
-
-/*
- *  Malloc Implementation
- *  ---------------------
- *  The following functions deal with the user-facing malloc implementation.
- */
-
-/*
- * Initialize: return -1 on error, 0 on success.
- */
-static char* heap_listp;
-
-int mm_init(void) {
-	if (verbose) printf("init\n");
-	heap_listp = NULL;
-    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1) {
-        return -1;
+    extendsize = max(asize, CHUNKSIZE);
+    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
+    	return NULL;
     }
-    put(heap_listp, 0);
-    put(heap_listp + (1*WSIZE), pack(DSIZE, 1));
-    put(heap_listp + (2*WSIZE), pack(DSIZE, 1));
-    put(heap_listp + (3*WSIZE), pack(0, 1));
-    heap_listp += (2 * DSIZE);
-    if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
-        return -1;
-    }
-    mm_checkheap(1);
-
-    return 0;
+    place(bp, asize);
+    return bp;
 }
 
 void *find_fit(size_t asize) {
@@ -260,45 +305,6 @@ void place(void *bp, size_t asize) {
 	}
 }
 
-/*
- * malloc
- */
-
-void *malloc (size_t size) {
-    if (verbose) printf("malloc: size = %ld\n", size);
-
-    //checkheap(1);  // Let's make sure the heap is ok!
-
-    //size = size;
-    size_t asize;
-    size_t extendsize;
-    void *bp;
-
-    if (heap_listp == 0) {
-    	mm_init();
-    }
-    if (size <= 0) {
-    	return NULL;
-    }
-
-    if (size <= DSIZE) {
-    	asize = 2 * DSIZE;
-    }
-    else {
-    	asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
-    }
-    if ((bp = find_fit(asize)) != NULL) {
-    	place(bp, asize);
-    	return bp;
-    }
-    
-    extendsize = max(asize, CHUNKSIZE);
-    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
-    	return NULL;
-    }
-    place(bp, asize);
-    return bp;
-}
 
 /*
  * free
