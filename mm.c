@@ -28,7 +28,7 @@
 #define WSIZE 8
 #define DSIZE 16
 #define CHUNKSIZE (1<<8)
-#define BIN 32
+#define BIN 20
 
 #define verbose 1
 
@@ -51,6 +51,10 @@
 #define checkheap(...)
 #endif
 
+static char* heap_listp;
+static void* bin[BIN];
+
+
 /*
  *  Helper functions
  *  ----------------
@@ -69,6 +73,10 @@ static inline int aligned(const void const* p) {
 // Return whether the pointer is in the heap.
 static int in_heap(const void* p) {
     return p <= (void *)((char *)mem_heap_hi() + WSIZE) && p >= (void *)((char *)mem_heap_lo() + (BIN+1) * WSIZE);
+}
+
+static int in_list(const void *p) {
+	return (char *)p >= heap_listp && (char *)p <= heap_listp + (BIN-1)*WSIZE;
 }
 
 /*
@@ -103,6 +111,16 @@ static inline void put(void* block, size_t val) {
     (*(size_t *)block) = val;
 }
 
+static inline void put_ptr(void* block, void* ptr) {
+	*(size_t *)block = size_t(ptr);
+}
+
+static inline void put_bin(void* block, size_t val) {
+	REQUIRES(block != NULL);
+	REQUIRES(in_list(block));
+	(*(size_t *)block) = val;
+}
+
 static inline size_t get_size(void* block) {
 	REQUIRES(block != NULL);
 	REQUIRES(in_heap(block));
@@ -126,7 +144,6 @@ static inline void* footer_pointer(void* block) {
 	REQUIRES(in_heap(block));
 	return (char *)block + get_size(header_pointer(block)) - DSIZE;
 }
-
 static inline void* next_block(void* block) {
 	REQUIRES(block != NULL);
 	REQUIRES(in_heap(block));
@@ -139,8 +156,26 @@ static inline void* prev_block(void* block) {
 	return (char *)block - get_size((char *)block - DSIZE);
 }
 
-static int in_list(void*);
+static inline void* next_pointer(void* block) {
+	REQUIRES(block != NULL);
+	return (char *)block;
+}
+
+static inline void* prev_pointer(void* block) {
+	REQUIRES(block != NULL);
+	return (char *)block + WSIZE;
+}
+
+static inline void* next(void* block) {
+	return *(char **)block;
+}
+
+static inline void* prev(void* block) {
+	return *(char **)prev_pointer(block);
+}
+
 static void insert(void*);
+static void delete(void*);
 static void *extend_heap(size_t);
 static void *coalesce(void*);
 static void *find_fit(size_t);
@@ -156,19 +191,19 @@ static void place(void*, size_t);
  * Initialize: return -1 on error, 0 on success.
  */
 
- static char* heap_listp;
-
 int mm_init(void) {
 	if (verbose) printf("init\n");
-    if ((heap_listp = mem_sbrk((BIN+1)*WSIZE + 3*WSIZE)) == (void *)-1) {
+    for (int i = 0; i < BIN; i++) {
+    	bin[i] = 0;
+    }
+    if ((heap_listp = mem_sbrk((BIN+1)*WSIZE + 4*WSIZE)) == (void *)-1) {
         return -1;
     }
-    for (int i = 0; i < BIN; i++) {
-    	*(heap_listp + i * WSIZE) = 0;
-    }
-    put(heap_listp + ((BIN+1)*WSIZE), pack(DSIZE, 1));
-    put(heap_listp + ((BIN+2)*WSIZE), pack(DSIZE, 1));
-    put(heap_listp + ((BIN+3)*WSIZE), pack(0, 1));
+    put(heap_listp, 0);
+    put(heap_listp + WSIZE, pack(DSIZE, 1));
+    put(heap_listp + 2 * WSIZE, pack(DSIZE, 1));
+    put(heap_listp + 3 * WSIZE, pack(0, 1));
+    heap_listp += 2 * DSIZE;
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
         return -1;
@@ -228,18 +263,72 @@ static void *coalesce(void *bp) {
 static void insert(void* bp) {
 	if(verbose) printf("Inserting: ");
 	size_t size = get_size(header_pointer(bp));
-	char* bin_pointer = heap_listp + min(size, BIN * WSIZE + 2*DSIZE) - 2*DSIZE;
-	printf("bin_pointer: %p  size: %ld  \n", bin_pointer, size);
-	if ((*(size_t *)bin_pointer) == 0) {
-		(*(size_t *)bin_pointer) = (size_t)&bp;
-		put(bp, 0);
-		printf("the addr: %p\n", bp);
+	int i = 0;
+	while (i < BIN - 1 && size > 1) {
+		size /= 2;
+		i++;
+	}
+	void *bin_pointer = bin[i];
+	void *insert_pointer = NULL;
+
+	while (bin_pointer != NULL && size > get_size(header_pointer(bin_pointer))) {
+		insert_pointer = bin_pointer;
+		bin_pointer = next(bin_pointer);
+	}
+	if (bin_pointer != NULL) {
+		if (insert_pointer != NULL) {
+			put_ptr(next_pointer(bp), bin_pointer);
+			put_ptr(prev_pointer(bin_pointer), bp);
+			put_ptr(prev_pointer(bp), insert_pointer);
+			put_ptr(next_pointer(insert_pointer), bp);
+		}
+		else {
+			put_ptr(next_pointer(bp), bin_pointer);
+			put_ptr(prev_pointer(bin_pointer), bp);
+			put_ptr(prev_pointer(bp), NULL);
+			bin[i] = bp;
+		}
 	}
 	else {
-		put(bp, (*(size_t *)bin_pointer));
-		(*(size_t *)bin_pointer) = (size_t)&bp;
+		if (insert_pointer != NULL) {
+			put_ptr(next_pointer(bp), NULL);
+			put_ptr(prev_pointer(bp), insert_pointer);
+			put_ptr(next_pointer(insert_pointer), bp);
+		}
+		else {
+			put_ptr(next_pointer(bp), NULL);
+			put_ptr(prev_pointer(bp), NULL);
+			bin[i] = bp;
+		}
 	}
-	
+}
+
+static void delete(void* bp) {
+	if(verbose) printf("Deleting: ");
+	size_t size = get_size(header_pointer(bp));
+	int i = 0;
+	while (i < BIN - 1 && size > 1) {
+		size /= 2;
+		i++;
+	}
+	if (next(bp) != NULL) {
+		if (prev(bp) != NULL) {
+			put_ptr(prev_pointer(next(bp)), prev(bp));
+			put_ptr(next_pointer(prev(bp)), next(bp));
+		}
+		else {
+			put_ptr(prev_pointer(next(bp)), NULL);
+			bin[i] = next(bp);
+		}
+	}
+	else {
+		if (prev(bp) != NULL) {
+			put_ptr(next_pointer(prev(bp)), NULL);
+		}
+		else {
+			bin[i] = NULL;
+		}
+	}
 }
 
 /*
@@ -248,7 +337,6 @@ static void insert(void* bp) {
 
 void *malloc (size_t size) {
     if (verbose) printf("malloc: size = %ld\n", size);
-
     //checkheap(1);  // Let's make sure the heap is ok!
 
     //size = size;
@@ -269,14 +357,11 @@ void *malloc (size_t size) {
     else {
     	asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
     }
-    if ((bp = find_fit(asize)) != NULL) {
-    	place(bp, asize);
-    	return bp;
-    }
-    
-    extendsize = max(asize, CHUNKSIZE);
-    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
-    	return NULL;
+    if ((bp = find_fit(asize)) == NULL) {
+    	extendsize = max(asize, CHUNKSIZE);
+    	if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
+    		return NULL;
+    	}
     }
     place(bp, asize);
     return bp;
@@ -284,20 +369,22 @@ void *malloc (size_t size) {
 
 void *find_fit(size_t asize) {
 	if (verbose) printf("find_fit\n");
-	char *bin_pointer = heap_listp + asize - 2 * DSIZE;
-	while (in_list(bin_pointer) && (*(size_t *)bin_pointer) == 0) {
-		bin_pointer += WSIZE; 
-	}
-	if (in_list(bin_pointer)) {
-		void *p = (void *)(*(size_t *)bin_pointer);
-		put(bin_pointer, *(size_t *)bin_pointer);
-		return p;
+	int i = 0;
+	void *bp = NULL;
+	while (i < BIN) {
+		if ((bin[i] != NULL && asize <= 1) || i == BIN - 1) {
+			bp = bin[i];
+			while (bp != NULL && asize > get_size(header_pointer(bp))) {
+				bp = next(bp);
+			}
+			if (bp != NULL) {
+				return bp;
+			}
+		}
+		i++;
+		asize /= 2;
 	}
 	return NULL;
-}
-
-int in_list(void *p) {
-	return (char *)p >= heap_listp && (char *)p <= heap_listp + (BIN-1)*WSIZE;
 }
 
 void place(void *bp, size_t asize) {
@@ -364,6 +451,7 @@ void free (void *ptr) {
  * realloc - you may want to look at mm-naive.c
  */
 void *realloc(void *oldptr, size_t size) {
+	/*
 	if (verbose) printf("realloc: size %ld\n", size);
 	if (heap_listp == 0) {
 		mm_init();
@@ -416,6 +504,7 @@ void *realloc(void *oldptr, size_t size) {
 		}
 	}
 	return oldptr;
+	*/
 }
 
 /*
