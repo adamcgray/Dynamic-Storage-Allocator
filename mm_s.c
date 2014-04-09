@@ -27,7 +27,7 @@
 
 #define WSIZE 8
 #define DSIZE 16
-#define CHUNKSIZE (1<<7)
+#define CHUNKSIZE (1<<8)
 #define BIN 20
 
 #define verbose 0
@@ -155,25 +155,19 @@ static inline void* prev_block(void* block) {
 
 static inline void* next_pointer(void* block) {
 	REQUIRES(block != NULL);
-	REQUIRES(in_heap(block));
 	return (char *)block;
 }
 
 static inline void* prev_pointer(void* block) {
 	REQUIRES(block != NULL);
-	REQUIRES(in_heap(block));
 	return (char *)block + WSIZE;
 }
 
 static inline void* next(void* block) {
-	REQUIRES(block != NULL);
-	REQUIRES(in_heap(block));
 	return *(char **)block;
 }
 
 static inline void* prev(void* block) {
-	REQUIRES(block != NULL);
-	REQUIRES(in_heap(block));
 	return *(char **)prev_pointer(block);
 }
 
@@ -193,10 +187,6 @@ static void place(void*, size_t);
 /*
  * Initialize: return -1 on error, 0 on success.
  */
-
- /* bin layout */
- /* 32 40 48 64 ... 256   -- 29 bins */
- /* 512 1024 2048 4096    -- 4 bins */
 
 int mm_init(void) {
 	if (verbose) printf("init\n");
