@@ -28,7 +28,8 @@
 #define WSIZE 8
 #define DSIZE 16
 #define CHUNKSIZE (1<<8)
-#define BIN 20
+#define BIN 32
+#define MSIZE 256
 
 #define verbose 0
 
@@ -155,19 +156,25 @@ static inline void* prev_block(void* block) {
 
 static inline void* next_pointer(void* block) {
 	REQUIRES(block != NULL);
+	REQUIRES(in_heap(block));
 	return (char *)block;
 }
 
 static inline void* prev_pointer(void* block) {
 	REQUIRES(block != NULL);
+	REQUIRES(in_heap(block));
 	return (char *)block + WSIZE;
 }
 
 static inline void* next(void* block) {
+	REQUIRES(block != NULL);
+	REQUIRES(in_heap(block));
 	return *(char **)block;
 }
 
 static inline void* prev(void* block) {
+	REQUIRES(block != NULL);
+	REQUIRES(in_heap(block));
 	return *(char **)prev_pointer(block);
 }
 
@@ -187,6 +194,10 @@ static void place(void*, size_t);
 /*
  * Initialize: return -1 on error, 0 on success.
  */
+
+ /* bin layout */
+ /* 32 40 48 64 ... 256   -- 29 bins */
+ /* 512 1024 2048 4096    -- 4 bins */
 
 int mm_init(void) {
 	if (verbose) printf("init\n");
@@ -265,19 +276,27 @@ static void *coalesce(void *bp) {
 static void insert(void* bp) {
 	size_t asize = get_size(header_pointer(bp));
 	size_t size = asize;
+	void *bin_pointer = NULL;
+	void *insert_pointer = NULL;
 	int i = 0;
-	while (i < BIN - 1 && size > 2 * DSIZE) {
-		size /= 2;
-		i++;
+	if (size <= MSIZE) {
+		i = (size - 2 * DSIZE) / WSIZE;
+		bin_pointer = bin[i];
+	}
+	else {
+		i = (MSIZE - 2 * DSIZE) / WSIZE;
+		while (i < BIN - 1 && size > MSIZE) {
+			size /= 2;
+			i++;
+		}
+		bin_pointer = bin[i];
+		while (bin_pointer != NULL && asize > get_size(header_pointer(bin_pointer))) {
+			insert_pointer = bin_pointer;
+			bin_pointer = next(bin_pointer);
+		}
 	}
 	if(verbose) printf("Inserting size: %ld, bin No. %d\n", get_size(header_pointer(bp)), i);
-	void *bin_pointer = bin[i];
-	void *insert_pointer = NULL;
 
-	while (bin_pointer != NULL && asize > get_size(header_pointer(bin_pointer))) {
-		insert_pointer = bin_pointer;
-		bin_pointer = next(bin_pointer);
-	}
 	if (bin_pointer != NULL) {
 		if (insert_pointer != NULL) {
 			put_ptr(next_pointer(bp), bin_pointer);
@@ -310,9 +329,15 @@ static void delete(void* bp) {
 	if(verbose) printf("Deleting size: %ld\n", get_size(header_pointer(bp)));
 	size_t size = get_size(header_pointer(bp));
 	int i = 0;
-	while (i < BIN - 1 && size > 2 * DSIZE) {
-		size /= 2;
-		i++;
+	if (size <= MSIZE) {
+		i = (size - 2 * DSIZE) / WSIZE;
+	}
+	else {
+		i = (MSIZE - 2 * DSIZE) / WSIZE;
+		while (i < BIN - 1 && size > MSIZE) {
+			size /= 2;
+			i++;
+		}
 	}
 	if (next(bp) != NULL) {
 		if (prev(bp) != NULL) {
@@ -371,13 +396,19 @@ void *malloc (size_t size) {
 }
 
 void *find_fit(size_t asize) {
-	if (verbose) printf("find_fit....");
+	if (verbose) printf("find fit....");
 	int i = 0;
 	size_t size = asize;
 	void *bp = NULL;
-	while (i < BIN - 1 && size > 2 * DSIZE) {
-		i++;
-		size /= 2;
+	if (size <= MSIZE) {
+		i = (size - 2 * DSIZE) / WSIZE;
+	}
+	else {
+		i = (MSIZE - 2 * DSIZE) / WSIZE;
+		while (i < BIN - 1 && size > MSIZE) {
+			size /= 2;
+			i++;
+		}
 	}
 	while (i < BIN) {
 		if (bin[i] != NULL) {
