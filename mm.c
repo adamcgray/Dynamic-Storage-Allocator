@@ -27,8 +27,8 @@
 
 #define WSIZE 8
 #define DSIZE 16
-#define CHUNKSIZE (1<<8)
-#define BIN 32
+#define CHUNKSIZE (1<<9)
+#define BIN 25
 #define MSIZE 256
 
 #define verbose 0
@@ -75,13 +75,6 @@ static inline int aligned(const void const* p) {
 static int in_heap(const void* p) {
     return p <= (void *)((char *)mem_heap_hi() + WSIZE) && p >= mem_heap_lo();
 }
-
-
-/*
-static int in_list(const void *p) {
-	return (char *)p >= heap_listp && (char *)p <= heap_listp + (BIN-1)*WSIZE;
-}
-*/
 
 /*
  *  Block Functions
@@ -196,8 +189,8 @@ static void place(void*, size_t);
  */
 
  /* bin layout */
- /* 32 40 48 64 ... 256   -- 29 bins */
- /* 512 1024 2048 4096    -- 4 bins */
+ /* 32 40 48 64 ... 248   -- 28 bins */
+ /* 256 512 1024 2048 4096 8192 16384    -- 7 bins */
 
 int mm_init(void) {
 	if (verbose) printf("init\n");
@@ -237,9 +230,10 @@ static void *extend_heap(size_t words) {
 
 static void *coalesce(void *bp) {
 	if (verbose) printf("coalescing\n");
+	size_t size = get_size(header_pointer(bp));
+
 	size_t prev_alloc = get_alloc(header_pointer(prev_block(bp)));
 	size_t next_alloc = get_alloc(header_pointer(next_block(bp)));
-	size_t size = get_size(header_pointer(bp));
 
 	if (prev_alloc && next_alloc) {
 		insert(bp);
@@ -280,11 +274,11 @@ static void insert(void* bp) {
 	void *insert_pointer = NULL;
 	int i = 0;
 	if (size <= MSIZE) {
-		i = (size - 2 * DSIZE) / WSIZE;
+		i = (size - 2 * DSIZE) / DSIZE;
 		bin_pointer = bin[i];
 	}
 	else {
-		i = (MSIZE - 2 * DSIZE) / WSIZE;
+		i = (MSIZE - 2 * DSIZE) / DSIZE;
 		while (i < BIN - 1 && size > MSIZE) {
 			size /= 2;
 			i++;
@@ -297,6 +291,7 @@ static void insert(void* bp) {
 	}
 	if(verbose) printf("Inserting size: %ld, bin No. %d\n", get_size(header_pointer(bp)), i);
 
+	
 	if (bin_pointer != NULL) {
 		if (insert_pointer != NULL) {
 			put_ptr(next_pointer(bp), bin_pointer);
@@ -330,10 +325,10 @@ static void delete(void* bp) {
 	size_t size = get_size(header_pointer(bp));
 	int i = 0;
 	if (size <= MSIZE) {
-		i = (size - 2 * DSIZE) / WSIZE;
+		i = (size - 2 * DSIZE) / DSIZE;
 	}
 	else {
-		i = (MSIZE - 2 * DSIZE) / WSIZE;
+		i = (MSIZE - 2 * DSIZE) / DSIZE;
 		while (i < BIN - 1 && size > MSIZE) {
 			size /= 2;
 			i++;
@@ -401,10 +396,10 @@ void *find_fit(size_t asize) {
 	size_t size = asize;
 	void *bp = NULL;
 	if (size <= MSIZE) {
-		i = (size - 2 * DSIZE) / WSIZE;
+		i = (size - 2 * DSIZE) / DSIZE;
 	}
 	else {
-		i = (MSIZE - 2 * DSIZE) / WSIZE;
+		i = (MSIZE - 2 * DSIZE) / DSIZE;
 		while (i < BIN - 1 && size > MSIZE) {
 			size /= 2;
 			i++;
@@ -451,7 +446,6 @@ void place(void *bp, size_t asize) {
  * free
  */
 void free (void *ptr) {
-	if (verbose) printf("%ld  ", (long)ptr);
 	if (ptr == 0) {
 		return;
 	}
@@ -528,9 +522,9 @@ void *realloc(void *oldptr, size_t size) {
 		return oldptr;
 	}
 	else {
-		remain = size - oldsize;
 		void* nextblock = next_block(oldptr);
 		if(!get_alloc(header_pointer(nextblock))) {
+			remain = size - oldsize;
 			asize = get_size(header_pointer(nextblock));
 			remain -= asize;
 			if ((signed long)remain < 0) {
@@ -551,14 +545,14 @@ void *realloc(void *oldptr, size_t size) {
 				return oldptr;
 			}
 		}
-		newptr = malloc(size);
-		if (!newptr) {
-			return 0;
-		}
-		memcpy(newptr, oldptr, oldsize);
-		free(oldptr);
-		return newptr;
 	}
+	newptr = malloc(size);
+	if (!newptr) {
+		return 0;
+	}
+	memcpy(newptr, oldptr, oldsize);
+	free(oldptr);
+	return newptr;
 }
 
 /*
