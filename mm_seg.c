@@ -53,7 +53,6 @@
 #endif
 
 static char* heap_listp;
-static char* tail_block;
 static void* bin[BIN];
 
 
@@ -93,8 +92,8 @@ static inline size_t min(size_t x, size_t y) {
 	return x > y ? y : x;
 }
 
-static inline size_t pack(size_t size, size_t prev_alloc, size_t alloc) {
-    return size | (prev_alloc << 1) | alloc;
+static inline size_t pack(size_t size, size_t alloc) {
+    return size | alloc;
 }
 
 static inline size_t get(void* block) {
@@ -110,8 +109,6 @@ static inline void put(void* block, size_t val) {
 }
 
 static inline void put_ptr(void* block, void* ptr) {
-	REQUIRES(block != NULL);
-	REQUIRES(in_heap(block));
 	*(size_t *)block = (size_t)ptr;
 }
 
@@ -127,12 +124,6 @@ static inline size_t get_alloc(void* block) {
     return (get(block) & 0x1);
 }
 
-static inline size_t get_prev_alloc(void* block) {
-	REQUIRES(block != NULL);
-	REQUIRES(in_heap(block));
-	return ((get(block) & 0x2) >> 1);
-}
-
 static inline void* header_pointer(void* block) {
 	REQUIRES(block != NULL);
 	REQUIRES(in_heap(block));
@@ -144,7 +135,6 @@ static inline void* footer_pointer(void* block) {
 	REQUIRES(in_heap(block));
 	return (char *)block + get_size(header_pointer(block)) - DSIZE;
 }
-
 static inline void* next_block(void* block) {
 	REQUIRES(block != NULL);
 	REQUIRES(in_heap(block));
@@ -172,15 +162,13 @@ static inline void* prev_pointer(void* block) {
 static inline void* next(void* block) {
 	REQUIRES(block != NULL);
 	REQUIRES(in_heap(block));
-	//printf("%p %p %p\n", block, *(char **)block, mem_heap_hi());
 	return *(char **)block;
 }
 
 static inline void* prev(void* block) {
 	REQUIRES(block != NULL);
 	REQUIRES(in_heap(block));
-	//printf("%p %p %p\n", block, *(char **)((char *)block + WSIZE), mem_heap_hi());
-	return *(char **)((char *)block + WSIZE);
+	return *(char **)prev_pointer(block);
 }
 
 static void insert(void*);
@@ -213,29 +201,29 @@ int mm_init(void) {
         return -1;
     }
     put(heap_listp, 0);
-    put(heap_listp + WSIZE, pack(DSIZE, 1, 1));
-    put(heap_listp + 2 * WSIZE, pack(DSIZE, 1, 1));
-    put(heap_listp + 3 * WSIZE, pack(0, 1, 1));
+    put(heap_listp + WSIZE, pack(DSIZE, 1));
+    put(heap_listp + 2 * WSIZE, pack(DSIZE, 1));
+    put(heap_listp + 3 * WSIZE, pack(0, 1));
     heap_listp += DSIZE;
-    tail_block = heap_listp;
+
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
         return -1;
     }
+
     return 0;
 }
 
 static void *extend_heap(size_t words) {
     size_t size;
     char *bp;
+    if (verbose) printf("extending\n");
     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-    if (verbose) printf("extending... size %ld\n", size);
     if ((long)(bp = mem_sbrk(size)) == -1) {
         return NULL;
     }
-    put(header_pointer(bp), pack(size, get_alloc(header_pointer(tail_block)), 0));
-    put(footer_pointer(bp), pack(size, get_alloc(header_pointer(tail_block)), 0));
-    put(header_pointer(next_block(bp)), pack(0, 1, 1));
-    tail_block = bp;
+    put(header_pointer(bp), pack(size, 0));
+    put(footer_pointer(bp), pack(size, 0));
+    put(header_pointer(next_block(bp)), pack(0, 1));
     return coalesce(bp);
     
 }
@@ -243,8 +231,10 @@ static void *extend_heap(size_t words) {
 static void *coalesce(void *bp) {
 	if (verbose) printf("coalescing\n");
 	size_t size = get_size(header_pointer(bp));
-	size_t prev_alloc = get_prev_alloc(header_pointer(bp));
+
+	size_t prev_alloc = get_alloc(header_pointer(prev_block(bp)));
 	size_t next_alloc = get_alloc(header_pointer(next_block(bp)));
+
 	if (prev_alloc && next_alloc) {
 		insert(bp);
 		return bp;
@@ -252,37 +242,26 @@ static void *coalesce(void *bp) {
 
 	if (prev_alloc && !next_alloc) {
 		delete(next_block(bp));
-		if (tail_block == next_block(bp)) {
-			tail_block = bp;
-		}
 		size += get_size(header_pointer(next_block(bp)));
-		put(header_pointer(bp), pack(size, get_prev_alloc(header_pointer(bp)), 0));
-		put(footer_pointer(bp), pack(size, get_prev_alloc(header_pointer(bp)), 0));
+		put(header_pointer(bp), pack(size, 0));
+		put(footer_pointer(bp), pack(size, 0));
 	}
 
 	else if (!prev_alloc && next_alloc) {
 		delete(prev_block(bp));
-		if (tail_block == bp) {
-			tail_block = prev_block(bp);
-		}
-
 		size += get_size(header_pointer(prev_block(bp)));
+		put(footer_pointer(bp), pack(size, 0));
+		put(header_pointer(prev_block(bp)), pack(size, 0));
 		bp = prev_block(bp);
-		put(header_pointer(bp), pack(size, get_prev_alloc(header_pointer(bp)), 0));
-		put(footer_pointer(bp), pack(size, get_prev_alloc(header_pointer(bp)), 0));
-		
 	}
 
 	else {
 		delete(next_block(bp));
 		delete(prev_block(bp));
-		if (tail_block == bp || tail_block == next_block(bp)) {
-			tail_block = prev_block(bp);
-		}
-		size += get_size(header_pointer(prev_block(bp))) + get_size(header_pointer(next_block(bp)));
+		size += get_size(header_pointer(prev_block(bp))) + get_size(footer_pointer(next_block(bp)));
+		put(header_pointer(prev_block(bp)), pack(size, 0));
+		put(footer_pointer(next_block(bp)), pack(size, 0));
 		bp = prev_block(bp);
-		put(header_pointer(bp), pack(size, get_prev_alloc(header_pointer(bp)), 0));
-		put(footer_pointer(bp), pack(size, get_prev_alloc(header_pointer(bp)), 0));
 	}
 	insert(bp);
 	return bp;
@@ -310,8 +289,9 @@ static void insert(void* bp) {
 			bin_pointer = next(bin_pointer);
 		}
 	}
-
 	if(verbose) printf("Inserting size: %ld, bin No. %d\n", get_size(header_pointer(bp)), i);
+
+	
 	if (bin_pointer != NULL) {
 		if (insert_pointer != NULL) {
 			put_ptr(next_pointer(bp), bin_pointer);
@@ -341,7 +321,7 @@ static void insert(void* bp) {
 }
 
 static void delete(void* bp) {
-	if(verbose) printf("Deleting size: %p  %ld\n", bp, get_size(header_pointer(bp)));
+	if(verbose) printf("Deleting size: %ld\n", get_size(header_pointer(bp)));
 	size_t size = get_size(header_pointer(bp));
 	int i = 0;
 	if (size <= MSIZE) {
@@ -373,35 +353,32 @@ static void delete(void* bp) {
 		}
 	}
 }
+
 /*
  * malloc
  */
 
 void *malloc (size_t size) {
-	if (verbose) {
-		printf("----------------------\n");
-    	printf("malloc: size = %ld\n", size);
+    if (verbose) printf("malloc: size = %ld\n", size);
     //checkheap(1);  // Let's make sure the heap is ok!
-	    for (int i = 0; i < BIN; i++) {
-	    	if (bin[i] != NULL)
-	    		printf("i: %d,  %p,  size: %ld\n", i, bin[i], get_size(header_pointer((void *)bin[i])));
-	    }
-	}
 
     //size = size;
     size_t asize;
     size_t extendsize;
     void *bp;
 
+    if (heap_listp == 0) {
+    	mm_init();
+    }
     if (size <= 0) {
     	return NULL;
     }
 
-    if (size <= 3 * WSIZE) {
+    if (size <= DSIZE) {
     	asize = 2 * DSIZE;
     }
     else {
-    	asize = DSIZE * ((size + WSIZE + DSIZE - 1) / DSIZE);
+    	asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
     }
     if ((bp = find_fit(asize)) == NULL) {
     	extendsize = max(asize, CHUNKSIZE);
@@ -414,7 +391,7 @@ void *malloc (size_t size) {
 }
 
 void *find_fit(size_t asize) {
-	if (verbose) printf("find fit size %ld....", asize);
+	if (verbose) printf("find fit....");
 	int i = 0;
 	size_t size = asize;
 	void *bp = NULL;
@@ -435,7 +412,7 @@ void *find_fit(size_t asize) {
 				bp = next(bp);
 			}
 			if (bp != NULL) {
-				if (verbose) printf("found bin NO. %d\n", i);
+				if (verbose) printf("found\n");
 				return bp;
 			}
 		}
@@ -446,23 +423,21 @@ void *find_fit(size_t asize) {
 }
 
 void place(void *bp, size_t asize) {
-	if (verbose) printf("place size %ld\n", asize);
+	if (verbose) printf("place\n");
 	size_t size, oldsize;
 	oldsize = get_size(header_pointer(bp));
 	size = oldsize - asize;
 	delete(bp);
 	if (size >= 2 * DSIZE) {
-		put(header_pointer(bp), pack(asize, get_prev_alloc(header_pointer(bp)), 1));
-		put(header_pointer(next_block(bp)), pack(size, 1, 0));
-		put(footer_pointer(next_block(bp)), pack(size, 1, 0));
+		put(header_pointer(bp), pack(asize, 1));
+		put(footer_pointer(bp), pack(asize, 1));
+		put(header_pointer(next_block(bp)), pack(size, 0));
+		put(footer_pointer(next_block(bp)), pack(size, 0));
 		insert(next_block(bp));
-		if (bp == tail_block) {
-			tail_block = next_block(bp);
-		}
 	}
 	else {
-		put(header_pointer(bp), pack(oldsize, get_prev_alloc(header_pointer(bp)), 1));
-		put(header_pointer(next_block(bp)), pack(get_size(header_pointer(next_block(bp))), 1, get_alloc(header_pointer(next_block(bp)))));
+		put(header_pointer(bp), pack(oldsize, 1));
+		put(footer_pointer(bp), pack(oldsize, 1));
 	}
 }
 
@@ -473,6 +448,9 @@ void place(void *bp, size_t asize) {
 void free (void *ptr) {
 	if (ptr == 0) {
 		return;
+	}
+	if (heap_listp == 0) {
+		mm_init();
 	}
 	if (!in_heap(ptr)) {
 		//if (verbose) printf("free a pointer not in heap\n");
@@ -486,22 +464,12 @@ void free (void *ptr) {
 		//if (verbose) printf("Block is not allocated\n");
 		return;
 	}
-	if (verbose) {
-		printf("---------------\n");
-		printf("free: %ld\n", get_size(header_pointer(ptr)));
-		for (int i = 0; i < BIN; i++) {
-	    	if (bin[i] != NULL)
-	    		printf("i: %d,  %p,  size: %ld\n", i, bin[i], get_size(header_pointer(bin[i])));
-	    }
-	}
+	if (verbose) printf("free: %ld  %ld\n", get(header_pointer(ptr)), get(footer_pointer(ptr)));
 
    size_t size = get_size(header_pointer(ptr));
 
-   put(header_pointer(ptr), pack(size, get_prev_alloc(header_pointer(ptr)), 0));
-   put(footer_pointer(ptr), pack(size, get_prev_alloc(header_pointer(ptr)), 0));
-   if (next_block(ptr) != (char *)mem_heap_hi() + WSIZE) {
-   	put(header_pointer(next_block(ptr)), pack(get_size(header_pointer(next_block(ptr))), 0, get_alloc(header_pointer(next_block(ptr)))));
-   }
+   put(header_pointer(ptr), pack(size, 0));
+   put(footer_pointer(ptr), pack(size, 0));
    coalesce(ptr);
 }
 
@@ -509,18 +477,12 @@ void free (void *ptr) {
  * realloc - you may want to look at mm-naive.c
  */
 void *realloc(void *oldptr, size_t size) {
-	if (verbose) {
-		printf("---------------\n");
-		printf("realloc: %p size %ld\n", oldptr, size);
-		for (int i = 0; i < BIN; i++) {
-	    	if (bin[i] != NULL)
-	    		printf("i: %d,  %p,  size: %ld\n", i, bin[i], get_size(header_pointer(bin[i])));
-	    }
-	}
+	
+	if (verbose) printf("realloc: size %ld\n", size);
 	if (heap_listp == 0) {
 		mm_init();
 	}
-    size_t oldsize, remain, asize;
+    size_t oldsize, asize, remain;
     void *newptr;
 
     if (size == 0) {
@@ -537,35 +499,28 @@ void *realloc(void *oldptr, size_t size) {
 	if (!in_heap(oldptr)) {
 		return 0;
 	}
-	if (size <= 3 * WSIZE) {
+	if (size <= DSIZE) {
     	size = 2 * DSIZE;
     }
     else {
-    	size = DSIZE * ((size + WSIZE + DSIZE - 1) / DSIZE);
+    	size = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
     }
 	oldsize = get_size(header_pointer(oldptr));
 	if (size <= oldsize) {
 		remain = oldsize - size;
 		if (remain >= 2 * DSIZE) {
-			put(header_pointer(oldptr), pack(size, get_prev_alloc(header_pointer(oldptr)), 1));
-			put(header_pointer(next_block(oldptr)), pack(remain, 1, 0));
-			put(footer_pointer(next_block(oldptr)), pack(remain, 1, 0));
-			char *p = next_block(oldptr);
-			if (p != (char *)mem_heap_hi() + WSIZE) {
-				put(header_pointer(next_block(p)), pack(get_size(header_pointer(next_block(p))), 0, get_alloc(header_pointer(next_block(p)))));
-			}
+			put(header_pointer(oldptr), pack(size, 1));
+			put(footer_pointer(oldptr), pack(size, 1));
+			put(header_pointer(next_block(oldptr)), pack(remain, 0));
+			put(footer_pointer(next_block(oldptr)), pack(remain, 0));
 			insert(next_block(oldptr));
-			if (tail_block == oldptr) {
-				tail_block = next_block(oldptr);
-			}
 		}
 		else {
-			put(header_pointer(oldptr), pack(oldsize, get_prev_alloc(header_pointer(oldptr)), 1));
-			put(header_pointer(next_block(oldptr)), pack(get_size(header_pointer(next_block(oldptr))), 1, get_alloc(header_pointer(next_block(oldptr)))));
+			put(header_pointer(oldptr), pack(oldsize, 1));
+			put(footer_pointer(oldptr), pack(oldsize, 1));
 		}
 		return oldptr;
 	}
-	
 	else {
 		void* nextblock = next_block(oldptr);
 		if(!get_alloc(header_pointer(nextblock))) {
@@ -577,26 +532,20 @@ void *realloc(void *oldptr, size_t size) {
 				asize += oldsize;
 				remain = asize - size;
 				if (remain >= 2 * DSIZE) {
-					put(header_pointer(oldptr), pack(size, get_prev_alloc(header_pointer(oldptr)), 1));
-					put(header_pointer(next_block(oldptr)), pack(remain, 1, 0));
-					put(footer_pointer(next_block(oldptr)), pack(remain, 1, 0));
+					put(header_pointer(oldptr), pack(size, 1));
+					put(footer_pointer(oldptr), pack(size, 1));
+					put(header_pointer(next_block(oldptr)), pack(remain, 0));
+					put(footer_pointer(next_block(oldptr)), pack(remain, 0));
 					insert(next_block(oldptr));
-					if (tail_block == nextblock) {
-						tail_block = next_block(oldptr);
-					}
 				}
 				else {
-					put(header_pointer(oldptr), pack(asize, get_prev_alloc(header_pointer(oldptr)), 1));
-					put(header_pointer(next_block(oldptr)), pack(get_size(header_pointer(next_block(oldptr))), 1, get_alloc(header_pointer(next_block(oldptr)))));
-					if (tail_block == nextblock) {
-						tail_block = oldptr;
-					}
+					put(header_pointer(oldptr), pack(asize, 1));
+					put(footer_pointer(oldptr), pack(asize, 1));
 				}
 				return oldptr;
 			}
 		}
 	}
-	
 	newptr = malloc(size);
 	if (!newptr) {
 		return 0;
@@ -621,6 +570,7 @@ void *calloc (size_t nmemb, size_t size) {
 
 // Returns 0 if no errors were found, otherwise returns the error
 int mm_checkheap(int v) {
+	return 0;
     if (v) {
     	void *ptr = heap_listp;
     	if ((long)get_size((char *)ptr - 3 * WSIZE) != DSIZE ||
@@ -635,11 +585,17 @@ int mm_checkheap(int v) {
     			printf("not aligned %ld\n", (long)ptr);
     			return 1;
     		}
-    		
+    		if ((long)get(header_pointer(ptr)) != (long)get(footer_pointer(ptr))) {
+    			printf("block doesn't match, %ld,   %ld\n", (long)get(header_pointer(ptr)), (long)get(footer_pointer(ptr)));
+    			return 1;
+    		}
+    		else if (get_size(header_pointer(next_block(ptr))) != 0 && (long)get(header_pointer(next_block(ptr))) != (long)get(footer_pointer(next_block(ptr)))) {
+    			printf("next block doesn't match, %ld,   %ld\n", (long)get(header_pointer(next_block(ptr))), (long)get(footer_pointer(next_block(ptr))));
+    			return 1;
+    		}
     		ptr = next_block(ptr);
     	}
-    	if (get((char *)ptr - WSIZE) != pack(0, 1, 1)) {
-
+    	if (get((char *)ptr - WSIZE) != pack(0, 1)) {
     		printf("Epilogue block corrupted\n");
     		return 1;
     	}
