@@ -27,8 +27,8 @@
 
 #define WSIZE 8
 #define DSIZE 16
-#define CHUNKSIZE (1<<9)
-#define BIN 25
+#define CHUNKSIZE (1<<8)
+#define BIN 36
 #define MSIZE 256
 
 #define verbose 0
@@ -295,11 +295,11 @@ static void insert(void* bp) {
 	void *insert_pointer = NULL;
 	int i = 0;
 	if (size <= MSIZE) {
-		i = (size - 2 * DSIZE) / DSIZE;
+		i = (size - 2 * DSIZE) / WSIZE;
 		bin_pointer = bin[i];
 	}
 	else {
-		i = (MSIZE - 2 * DSIZE) / DSIZE;
+		i = (MSIZE - 2 * DSIZE) / WSIZE;
 		while (i < BIN - 1 && size > MSIZE) {
 			size /= 2;
 			i++;
@@ -345,10 +345,10 @@ static void delete(void* bp) {
 	size_t size = get_size(header_pointer(bp));
 	int i = 0;
 	if (size <= MSIZE) {
-		i = (size - 2 * DSIZE) / DSIZE;
+		i = (size - 2 * DSIZE) / WSIZE;
 	}
 	else {
-		i = (MSIZE - 2 * DSIZE) / DSIZE;
+		i = (MSIZE - 2 * DSIZE) / WSIZE;
 		while (i < BIN - 1 && size > MSIZE) {
 			size /= 2;
 			i++;
@@ -401,7 +401,7 @@ void *malloc (size_t size) {
     	asize = 2 * DSIZE;
     }
     else {
-    	asize = DSIZE * ((size + WSIZE + DSIZE - 1) / DSIZE);
+    	asize = WSIZE * ((size + WSIZE + WSIZE - 1) / WSIZE);
     }
     if ((bp = find_fit(asize)) == NULL) {
     	extendsize = max(asize, CHUNKSIZE);
@@ -419,10 +419,10 @@ void *find_fit(size_t asize) {
 	size_t size = asize;
 	void *bp = NULL;
 	if (size <= MSIZE) {
-		i = (size - 2 * DSIZE) / DSIZE;
+		i = (size - 2 * DSIZE) / WSIZE;
 	}
 	else {
-		i = (MSIZE - 2 * DSIZE) / DSIZE;
+		i = (MSIZE - 2 * DSIZE) / WSIZE;
 		while (i < BIN - 1 && size > MSIZE) {
 			size /= 2;
 			i++;
@@ -541,7 +541,7 @@ void *realloc(void *oldptr, size_t size) {
     	size = 2 * DSIZE;
     }
     else {
-    	size = DSIZE * ((size + WSIZE + DSIZE - 1) / DSIZE);
+    	size = WSIZE * ((size + WSIZE + WSIZE - 1) / WSIZE);
     }
 	oldsize = get_size(header_pointer(oldptr));
 	if (size <= oldsize) {
